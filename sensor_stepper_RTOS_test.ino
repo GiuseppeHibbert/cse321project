@@ -1,5 +1,6 @@
 #include <Arduino_FreeRTOS.h>
 #include <Timers.h>
+#include <Stepper.h>
 
 // Stepper pins Driver 0
 #define IN1_0 11
@@ -13,13 +14,23 @@
 #define IN3_1 5
 #define IN4_1 4
 
-// Ultrasonic pins
+// Ultrasonic 0 pins
 #define TRIG_0 3
 #define ECHO_0 4
 
-// Ultrasonic pins
+// Ultrasonic 1 pins
 #define TRIG_1 5
 #define ECHO_1 6
+
+// Laser Pointer Pin
+#define LASER 50  // Arbitrary Digital Pin
+
+const int stepsPerRevolution = 2048;
+
+int debug = 0;
+
+Stepper sensorStepper(stepsPerRevolution, 11, 10, 9, 8);
+Stepper assemblyStepper(stepsPerRevolution, 7, 6, 5, 4);
 
 // Stepper sequence (half-step)
 const int stepSequence[8][4] = {
@@ -41,12 +52,17 @@ typedef enum { EV_POWER_ON, EV_FOUND, EV_LOST, EV_LEFT,
 // ----- RTOS objects -----
 QueueHandle_t xEventQueue;
 SemaphoreHandle_t xStateMutex;
+TimerHandle_t xSearchTimer; // create search timer for timeout after 10s of detecting an object without moving to target state ( edge case handling )
 
 // ----- Timer callbacks -----
 void searchTimerCallback(TimerHandle_t){ system_event_t e=EV_TIMEOUT; xQueueSend(xEventQueue,&e,0); }
 
 // ----- Sensor Stuff -----
 int sensor_mode = 0;
+int sensorStepPos = 0;
+int assemblyStepPos = 0;
+
+int laser = 0;
 
 inline void pushEvent(system_event_t ev){ 
     xQueueSend(xEventQueue, &ev, 0); 
@@ -63,13 +79,19 @@ void stateMachineTask(void *){
       // Note: May need to do something in setup to "kick-start" the program.
       if (currentState==STATE_SEARCH && e==EV_FOUND) {
         // Stop Sensor Stepper Motor
+        sensorStepper.setSpeed(0);
         // Grab Position
+        // Use sensorStepPos once setup
         // Move Position of Assembly Stepper Motor to Match Sensor Stepper Motor
+        // Step assemblyStepper until StepPos of both match.
         // Move to Target State
+        currentState = STATE_TARGET;
       }
       else if (currentState==STATE_TARGET) {
         // May need a "firing" state
         // "Fire" Laser i.e. Blink Laser
+        laser = laser ^ 1; // Toggles Laser
+        digitalWrite(LASER, laser);
       }
       /*else if ((currentState==STATE_TARGET && e==EV_LEFT) || (currentState==STATE_TARGET && e==EV_RIGHT)) {
         // Move to Tracking State
@@ -79,18 +101,32 @@ void stateMachineTask(void *){
       // i.e. Which ever fires first will maintain its movement
       else if (currentState==STATE_TARGET && e==EV_LEFT) {
         // Start Assembly Stepper Motor moving Left
+        sensorStepper.setSpeed(0);
+        assemblyStepper.setSpeed(60); // 60 is arbitrary
+        assemblyStepper.step(1);
         // Start Out-of-Range Timer
+        if (!xTimerIsTimerActive(xSearchTimer)) {
+          xTimerStart(xSearchTimer,0);
+        }
       }
       else if (currentState==STATE_TARGET && e==EV_RIGHT) {
         // Start Assembly Stepper Motor moving right
+        sensorStepper.setSpeed(0);
+        assemblyStepper.setSpeed(60); // 60 is arbitrary
+        assemblyStepper.step(-1);
         // Start Out-of-Range Timer
+        if (!xTimerIsTimerActive(xSearchTimer)) {
+          xTimerStart(xSearchTimer,0);
+        }
       }
       /*else if (currentState==STATE_TRACKING && e==EV_FOUND) {
         // Stop Assembly Stepper Motor
       }*/
       else if (currentState==STATE_TRACKING && e==EV_TIMEOUT) {
         // Stop Assembly Stepper Motor
+        assemblyStepper.setSpeed(0);
         // Move Back to Search State
+        currentState = STATE_SEARCH;
       }
       xSemaphoreGive(xStateMutex);
     }
@@ -112,7 +148,6 @@ void stateSensorTask(void *) {
       Serial.println(" cm");
 
       xSemaphoreTake(xStateMutex,portMAX_DELAY);
-      //turret_state_t old=currentState;
 
       if (left_distance >= 10 && left_distance <= 20){
         if (currentState==STATE_SEARCH) {
@@ -148,28 +183,14 @@ void stateSensorTask(void *) {
       if ((left_distance < 20) && (left_distance >= 10 && left_distance <= 20)) {
         pushEvent(EV_RIGHT);
       }
-      /*if(distance >= 10 && distance <= 20){
-        // Move forward 180°
-        for(int i=0; i<2048; i++){ // 180° (half rotation)
-          stepForward();
-          delayMicroseconds(stepDelay);
-        }
-        delay(500); // short pause
-        // Move back 180°
-        for(int i=0; i<2048; i++){
-          stepBackward();
-          delayMicroseconds(stepDelay);
-        }
-        delay(500); // short pause
-      } else {
-        // Idle if out of range
-        delay(100);
-      }*/
   }
 }
 
 void setup() {
   // put your setup code here, to run once:
+  
+  sensorStepper.setSpeed(60);
+  assemblyStepper.setSpeed(60);
 
   Serial.begin(9600);
 
@@ -188,43 +209,18 @@ void setup() {
   pinMode(TRIG_1, OUTPUT);
   pinMode(ECHO_1, INPUT);
 
+  pinMode(LASER, OUTPUT);
+
   xEventQueue=xQueueCreate(10,sizeof(system_event_t));
   xStateMutex=xSemaphoreCreateMutex();
 
   xSearchTimer = xTimerCreate("Search Timeout", pdMS_TO_TICKS(10000), pdFALSE, NULL, searchTimerCallback);
 
-  xTaskCreatePinnedToCore(stateMachineTask,"FSM",4096,NULL,2,NULL,1);
-  xTaskCreatePinnedToCore(stateSensorTask, "Sensors Task", 4096, NULL, 1, NULL, 1);
+  xTaskCreate(stateMachineTask,"FSM",4096,NULL,2,NULL,1);
+  xTaskCreate(stateSensorTask, "Sensors Task", 4096, NULL, 1, NULL, 1);
+
   Serial.println("=== Turret Project: Prototype ===");
   
-}
-
-  (void) pvParameters;
-  for (;;)
-  {
-      long distance = getDistanceCM();
-      Serial.print("Distance: ");
-      Serial.print(distance);
-      Serial.println(" cm");
-      
-      if(distance >= 10 && distance <= 20){
-        // Move forward 180°
-        for(int i=0; i<2048; i++){ // 180° (half rotation)
-          stepForward();
-          delayMicroseconds(stepDelay);
-        }
-        delay(500); // short pause
-        // Move back 180°
-        for(int i=0; i<2048; i++){
-          stepBackward();
-          delayMicroseconds(stepDelay);
-        }
-        delay(500); // short pause
-      } else {
-        // Idle if out of range
-        delay(100);
-      }
-  }
 }
 
 // --- Ultrasonic distance ---
@@ -253,5 +249,21 @@ long getDistanceCM(int module) {
   }
 }
 
-void loop() {}
+void loop() {
+  // Rotate CW slowly at 5 RPM
+  if (debug) {
+  digitalWrite(5,HIGH);
+  myStepper.setSpeed(3);
+  myStepper.step(stepsPerRevolution/16);
+    Serial.print("Module 0 Sensed at ");
+  Serial.print(getDistanceCM(0));
+  Serial.println(" cm away!"); 
+    Serial.print("Module 1 Sensed at ");
+  Serial.print(getDistanceCM(1));
+  Serial.println(" cm away!"); 
+    digitalWrite(5,LOW);
+  myStepper.step(-stepsPerRevolution/16);
+  // Rotate CCW quickly at 10 RPM  
+  }
+}
 
