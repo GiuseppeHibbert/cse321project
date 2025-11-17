@@ -28,30 +28,39 @@
 // Laser Pointer Pin
 #define LASER 5  // Arbitrary Digital Pin
 
-const int stepsPerRevolution = 2048;
+typedef enum { STATE_OFF, STATE_IDLE, STATE_SEARCH, STATE_TARGET,
+               STATE_TRACKING, STATE_ERROR } turret_state_t;
+typedef enum { EV_POWER_ON, EV_FOUND, EV_LOST, EV_LEFT,
+               EV_RIGHT, EV_RETURN, EV_TIMEOUT, EV_ERROR} system_event_t;
+
+
 
 int debug = 0;
 
 // Stepper sensorStepper(stepsPerRevolution, 11, 10, 9, 8);
 // Stepper assemblyStepper(stepsPerRevolution, 7, 6, 5, 4);
 
-// Stepper sequence (half-step)
-const int stepSequence[8][4] = {
+// Step Sequence full step 
+const uint8_t stepSeq[4][4] = {
   {1,0,0,0},
-  {1,1,0,0},
   {0,1,0,0},
-  {0,1,1,0},
   {0,0,1,0},
-  {0,0,1,1},
-  {0,0,0,1},
-  {1,0,0,1}
+  {0,0,0,1}
 };
 
+int stepIndex = 0;
 
-typedef enum { STATE_OFF, STATE_IDLE, STATE_SEARCH, STATE_TARGET,
-               STATE_TRACKING, STATE_ERROR } turret_state_t;
-typedef enum { EV_POWER_ON, EV_FOUND, EV_LOST, EV_LEFT,
-               EV_RIGHT, EV_RETURN, EV_TIMEOUT, EV_ERROR} system_event_t;
+void stepMotor(int dir) {
+  stepIndex = (stepIndex + dir + 4) % 4;
+  digitalWrite(IN1_0, stepSeq[stepIndex][0]);
+  digitalWrite(IN2_0, stepSeq[stepIndex][1]);
+  digitalWrite(IN3_0, stepSeq[stepIndex][2]);
+  digitalWrite(IN4_0, stepSeq[stepIndex][3]);
+}
+
+
+
+
 
 
 turret_state_t currentState = STATE_OFF;
@@ -86,6 +95,7 @@ void stateMachineTask(void *){
       // Starting
       // Note: May need to do something in setup to "kick-start" the program.
       if (currentState==STATE_SEARCH && e==EV_FOUND) {
+
         digitalWrite(LASER, LOW);
         // Stop Sensor Stepper Motor
         // sensorStepper.setSpeed(0); // !!!!!!!!!!!!!!!!!!!! REPLACE WITH CORRECT
@@ -112,6 +122,11 @@ void stateMachineTask(void *){
       else if (currentState==STATE_TARGET && e==EV_LEFT) {
         laser = laser ^ 1; // Toggles Laser
         digitalWrite(LASER, laser);
+        Serial.println("About to move counteclockwise");
+        for (int i=0; i<80; i++) {
+          stepMotor(+1);
+          delay(2);
+        }
         Serial.println("TARGET + LEFT");
         currentState = STATE_TRACKING;
         // Start Assembly Stepper Motor moving Left
@@ -126,6 +141,11 @@ void stateMachineTask(void *){
       else if (currentState==STATE_TARGET && e==EV_RIGHT) {
         laser = laser ^ 1; // Toggles Laser
         digitalWrite(LASER, laser);
+        Serial.println("About to move clockwise");
+        for (int i=0; i<80; i++) {
+          stepMotor(-1);
+          delay(2);
+        }
         Serial.println("TARGET + RIGHT");
         currentState = STATE_TRACKING;
         // Start Assembly Stepper Motor moving Left
@@ -209,12 +229,16 @@ void stateSensorTask(void *) {
             pushEvent(EV_RETURN);
           }
         }
-        if (right_distance >= 10 && right_distance <= 20){
+        else if (right_distance >= 10 && right_distance <= 20){
           if (currentState==STATE_SEARCH) {
             pushEvent(EV_FOUND);
           }
+          else if(currentState == STATE_TRACKING){
+            pushEvent(EV_RETURN);
+          }
         }
       }
+
 
       // Both Lost
       if( left_distance < 400 && right_distance < 400 && (currentState != STATE_SEARCH)){
