@@ -2,7 +2,9 @@
 #include <queue.h>
 #include <semphr.h>
 #include <timers.h>
-//#include <Timers.h>
+// Reference for FreeRTOS: https://github.com/feilipu/Arduino_FreeRTOS_Library
+
+// Reference for Stepper Library ( not currently used): https://docs.arduino.cc/libraries/stepper/
 //#include <Stepper.h>
 
 // Stepper pins Driver 0
@@ -26,6 +28,7 @@
 #define ECHO_1 6
 
 // Laser Pointer Pin
+// Reference for Laser Module: https://manuals.plus/arduino/ky-008-laser-transmitter-module-manual
 #define LASER 5  // Arbitrary Digital Pin
 
 typedef enum { STATE_OFF, STATE_IDLE, STATE_SEARCH, STATE_TARGET,
@@ -41,6 +44,8 @@ int debug = 0;
 // Stepper assemblyStepper(stepsPerRevolution, 7, 6, 5, 4);
 
 // Step Sequence full step 
+// Reference Stepper.cpp from Arduino library, for how to manually update motors
+// https://github.com/arduino-libraries/Stepper/blob/master/src/Stepper.cpp
 const uint8_t stepSeq[4][4] = {
   {1,0,0,0},
   {0,1,0,0},
@@ -83,7 +88,7 @@ int laser = 0;
 inline void pushEvent(system_event_t ev){ 
     xQueueSend(xEventQueue, &ev, 0); 
 }
-
+// Reference: StateMachineTask modelled after the Washing Machine Lab Part 2
 void stateMachineTask(void *){
   system_event_t e;
   for(;;){
@@ -199,7 +204,7 @@ void stateMachineTask(void *){
     }
   }
 }
-
+// Reference for ultrasonic sensors: https://www.handsontec.com/dataspecs/HC-SR04-Ultrasonic.pdf
 void stateSensorTask(void *) {
   for (;;)
   {
@@ -287,6 +292,8 @@ void setup() {
 
   pinMode(LASER, OUTPUT);
 
+// Queue, Mutex, and Timer creation modelled after Lab 4 Part 2 Washing Machine
+  
   xEventQueue=xQueueCreate(10,sizeof(system_event_t));
   xStateMutex=xSemaphoreCreateMutex();
 
