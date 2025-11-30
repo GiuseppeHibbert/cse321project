@@ -2,9 +2,7 @@
 #include <queue.h>
 #include <semphr.h>
 #include <timers.h>
-// Reference for FreeRTOS: https://github.com/feilipu/Arduino_FreeRTOS_Library
-
-// Reference for Stepper Library ( not currently used): https://docs.arduino.cc/libraries/stepper/
+//#include <Timers.h>
 //#include <Stepper.h>
 
 // Stepper pins Driver 0
@@ -28,7 +26,6 @@
 #define ECHO_1 6
 
 // Laser Pointer Pin
-// Reference for Laser Module: https://manuals.plus/arduino/ky-008-laser-transmitter-module-manual
 #define LASER 5  // Arbitrary Digital Pin
 
 typedef enum { STATE_OFF, STATE_IDLE, STATE_SEARCH, STATE_TARGET,
@@ -44,8 +41,6 @@ int debug = 0;
 // Stepper assemblyStepper(stepsPerRevolution, 7, 6, 5, 4);
 
 // Step Sequence full step 
-// Reference Stepper.cpp from Arduino library, for how to manually update motors
-// https://github.com/arduino-libraries/Stepper/blob/master/src/Stepper.cpp
 const uint8_t stepSeq[4][4] = {
   {1,0,0,0},
   {0,1,0,0},
@@ -64,6 +59,32 @@ void stepMotor(int dir) {
 }
 
 
+void print_mapEnglish(int currentState){
+
+  switch(currentState){
+    case 0:
+      Serial.println("STATE_OFF"); 
+      break;
+    case 1:
+      Serial.println("STATE_IDLE"); 
+      break;
+    case 2:
+      Serial.println("STATE_SEARCH"); 
+      break;
+    case 3:
+      Serial.println("STATE_TARGET"); 
+      break;
+    case 4:
+      Serial.println("STATE_TRACKING"); 
+      break;
+    case 5:
+      Serial.println("STATE_ERROR"); 
+      break;
+    default:
+      break;
+
+  }
+}
 
 
 
@@ -82,13 +103,15 @@ SemaphoreHandle_t xStateMutex;
 int sensor_mode = 0;
 int sensorStepPos = 0;
 int assemblyStepPos = 0;
+int leftCount = 0;
+int rightCount = 0;
 
 int laser = 0;
 
 inline void pushEvent(system_event_t ev){ 
     xQueueSend(xEventQueue, &ev, 0); 
 }
-// Reference: StateMachineTask modelled after the Washing Machine Lab Part 2
+
 void stateMachineTask(void *){
   system_event_t e;
   for(;;){
@@ -99,6 +122,10 @@ void stateMachineTask(void *){
       //turret_state_t old=currentState;
       // Starting
       // Note: May need to do something in setup to "kick-start" the program.
+
+      // Once the Slip Rings allow 360degree stepping, Implement infinite spinning on the state search. 
+          // Flicker the light (Fire Mode)
+
       if (currentState==STATE_SEARCH && e==EV_FOUND) {
 
         digitalWrite(LASER, LOW);
@@ -110,7 +137,7 @@ void stateMachineTask(void *){
         // Step assemblyStepper until StepPos of both match.
         // Move to Target State
         currentState = STATE_TARGET;
-        Serial.println("SEARCH + FOUND");
+        //Serial.println("SEARCH + FOUND");
       }
       /*else if ((currentState==STATE_TARGET && e==EV_LEFT) || (currentState==STATE_TARGET && e==EV_RIGHT)) {
         // Move to Tracking State
@@ -120,19 +147,25 @@ void stateMachineTask(void *){
       // i.e. Which ever fires first will maintain its movement
 
 
-    else if (currentState==STATE_TARGET && e==EV_LOST){
-      currentState = STATE_SEARCH;
-    }
+      else if (currentState==STATE_TARGET && e==EV_LOST){
+        digitalWrite(LASER, LOW);
+        currentState = STATE_SEARCH;
+      }
 
-      else if (currentState==STATE_TARGET && e==EV_LEFT) {
-        laser = laser ^ 1; // Toggles Laser
-        digitalWrite(LASER, laser);
-        Serial.println("About to move counteclockwise");
-        for (int i=0; i<80; i++) {
-          stepMotor(+1);
-          delay(2);
+      else if (currentState==STATE_TARGET && e==EV_LEFT && e!=EV_RIGHT) {
+        //laser = laser ^ 1; // Toggles Laser
+        digitalWrite(LASER, HIGH);
+        //Serial.println("About to move counteclockwise");
+        xSemaphoreGive(xStateMutex);
+        for (int i=0; i<120; i++) {
+          
+          stepMotor(-1);
+          //delay(2);
+          vTaskDelay(pdMS_TO_TICKS(20));
         }
-        Serial.println("TARGET + LEFT");
+        xSemaphoreTake(xStateMutex,portMAX_DELAY);
+        //Serial.println("JUST MOVED left");
+        //Serial.println("TARGET + LEFT");
         currentState = STATE_TRACKING;
         // Start Assembly Stepper Motor moving Left
         //sensorStepper.setSpeed(0); // NEEDS REPLACEMENT !!!!!!!!!!!!
@@ -143,15 +176,20 @@ void stateMachineTask(void *){
           xTimerStart(xSearchTimer,0);
         } */
       }
-      else if (currentState==STATE_TARGET && e==EV_RIGHT) {
-        laser = laser ^ 1; // Toggles Laser
-        digitalWrite(LASER, laser);
-        Serial.println("About to move clockwise");
-        for (int i=0; i<80; i++) {
-          stepMotor(-1);
-          delay(2);
+      else if (currentState==STATE_TARGET && e==EV_RIGHT && e!=EV_LEFT) {
+        //laser = laser ^ 1; // Toggles Laser
+        digitalWrite(LASER, HIGH);
+        //Serial.println("About to move clockwise");
+        xSemaphoreGive(xStateMutex);
+        for (int i=0; i<120; i++) {
+          //Serial.println("moving right");
+          stepMotor(+1);
+          //delay(2);
+          vTaskDelay(pdMS_TO_TICKS(20));
         }
-        Serial.println("TARGET + RIGHT");
+        xSemaphoreTake(xStateMutex,portMAX_DELAY);
+                //Serial.println("JUST MOVED right");
+        //Serial.println("TARGET + RIGHT");
         currentState = STATE_TRACKING;
         // Start Assembly Stepper Motor moving Left
         //sensorStepper.setSpeed(0); // NEEDS REPLACEMENT !!!!!!!!!!!!
@@ -162,10 +200,18 @@ void stateMachineTask(void *){
           xTimerStart(xSearchTimer,0);
         } */
       }
+            
+      else if (currentState==STATE_TARGET && e!=EV_LEFT && e!=EV_RIGHT){
+        digitalWrite(LASER, LOW);
+        currentState = STATE_SEARCH;
+      }
+      
+
+              // new addition below to fix firing state
       else if (currentState==STATE_TRACKING && e==EV_RETURN) {
-        laser = laser ^ 1; // Toggles Laser
-        digitalWrite(LASER, laser);
-        Serial.println("TRACKING + RETURN");
+        //laser = laser ^ 1; // Toggles Laser
+        digitalWrite(LASER, HIGH);
+        //Serial.println("TRACKING + RETURN");
         currentState = STATE_TARGET;
         // Start Assembly Stepper Motor moving right
         //sensorStepper.setSpeed(0); // NEEDS REPLACEMENT !!!!!!!!!!!!
@@ -188,53 +234,67 @@ void stateMachineTask(void *){
         // Stop Assembly Stepper Motor
       }*/
       else if(currentState==STATE_TRACKING && e==EV_LOST){
+        digitalWrite(LASER, LOW);
         currentState = STATE_SEARCH;
-        Serial.println("TRACKING + LOST");
+        //Serial.println("TRACKING + LOST");
       }
 
       else if (currentState==STATE_TRACKING && e==EV_TIMEOUT) {
         // Stop Assembly Stepper Motor
         //assemblyStepper.setSpeed(0); // NEEDS REPLACEMENT !!!!!!!!!!!!
         // Move Back to Search State
+        digitalWrite(LASER, LOW);
         currentState = STATE_SEARCH;
-        Serial.println("TRACKING + TIMEOUT");
+        //Serial.println("TRACKING + TIMEOUT");
       }
-      Serial.println(currentState);
+      else if (currentState==STATE_TRACKING && e!=EV_LEFT && e!=EV_RIGHT){
+        digitalWrite(LASER, LOW);
+        currentState = STATE_SEARCH;
+      }
+      print_mapEnglish(currentState);      
       xSemaphoreGive(xStateMutex);
+
     }
   }
 }
-// Reference for ultrasonic sensors: https://www.handsontec.com/dataspecs/HC-SR04-Ultrasonic.pdf
+
 void stateSensorTask(void *) {
   for (;;)
   {
+
+
+
       //Serial.println("SENSOR RUNNING");
       // Note: Need to change things to make it work well is stateMachineTask
       long left_distance = getDistanceCM(0);
-      //Serial.print("Distance: ");
+      //Serial.print("Left Distance: ");
       //Serial.print(left_distance);
       //Serial.println(" cm");
 
+      //vTaskDelay(pdMS_TO_TICKS(50));
+
       long right_distance = getDistanceCM(1);
-      //Serial.print("Distance: ");
+      //Serial.print("Right Distance: ");
       //Serial.print(right_distance);
       //Serial.println(" cm");
 
+      //vTaskDelay(pdMS_TO_TICKS(50));
+
+
       xSemaphoreTake(xStateMutex,portMAX_DELAY);
       //Serial.println("TOOK SEMAPHORE");
-      if( (left_distance >= 10 && left_distance <= 20) && (right_distance >= 10 && right_distance <= 20)) {
-        if (left_distance >= 10 && left_distance <= 20){
+      if( (left_distance >= 5 && left_distance <= 20) && (right_distance >= 5 && right_distance <= 20)) {
+        if (left_distance >= 5 && left_distance <= 20){
           if (currentState==STATE_SEARCH) {
             //Serial.println("LEFT FOUND ");
             pushEvent(EV_FOUND);
             //Serial.println("AFTER PUSH EVENT ");
-
           }
           else if(currentState == STATE_TRACKING){
             pushEvent(EV_RETURN);
           }
         }
-        else if (right_distance >= 10 && right_distance <= 20){
+        else if (right_distance >= 5 && right_distance <= 20){
           if (currentState==STATE_SEARCH) {
             pushEvent(EV_FOUND);
           }
@@ -248,21 +308,28 @@ void stateSensorTask(void *) {
       // Both Lost
       if( left_distance < 400 && right_distance < 400 && (currentState != STATE_SEARCH)){
         if (((left_distance > 20) && (right_distance > 20)) ) {
-          Serial.println("EVENT LOST ");
+          //Serial.println("EVENT LOST ");
           pushEvent(EV_LOST);
         }
         // Right Lost
-        else if ((right_distance > 20) && (left_distance >= 10 && left_distance <= 20) && currentState == STATE_TARGET) {
-          Serial.println("EVENT RIGHT LOST ");
+        else if ((right_distance > 20) && (left_distance >= 5 && left_distance <= 20) && currentState == STATE_TARGET) {
+          //Serial.println("EVENT RIGHT LOST ");
+          leftCount++;
           pushEvent(EV_LEFT);
         }
         // Left Lost
-        else if ((left_distance < 20) && (right_distance >= 10 && right_distance <= 20) && currentState == STATE_TARGET) {
-          Serial.println("EVENT LEFT LOST ");
+        else if ((left_distance > 20) && (right_distance >= 5 && right_distance <= 20) && currentState == STATE_TARGET) {
+          //Serial.println("EVENT LEFT LOST ");
+          rightCount++;
           pushEvent(EV_RIGHT);
         }
       }
-            xSemaphoreGive(xStateMutex);
+      xSemaphoreGive(xStateMutex);
+
+      //Serial.print("left count:");
+      //Serial.println(leftCount);
+      //Serial.print("right count:");
+      //Serial.println(rightCount);
   }
 }
 
@@ -292,9 +359,7 @@ void setup() {
 
   pinMode(LASER, OUTPUT);
 
-// Queue, Mutex, and Timer creation modelled after Lab 4 Part 2 Washing Machine
-  
-  xEventQueue=xQueueCreate(10,sizeof(system_event_t));
+  xEventQueue=xQueueCreate(50,sizeof(system_event_t));
   xStateMutex=xSemaphoreCreateMutex();
 
   //xSearchTimer = xTimerCreate("Search Timeout", pdMS_TO_TICKS(10000), pdFALSE, NULL, searchTimerCallback);
@@ -312,24 +377,25 @@ void setup() {
 // --- Ultrasonic distance ---
 long getDistanceCM(int module) {
   if (module == 0) {
+    // converted from TaskDelayMicroseconds -> vTaskDelay non blocking
     digitalWrite(TRIG_0, LOW);
-    delayMicroseconds(2);
+    vTaskDelay(pdMS_TO_TICKS(2));
     digitalWrite(TRIG_0, HIGH);
-    delayMicroseconds(10);
+    vTaskDelay(pdMS_TO_TICKS(2));
     digitalWrite(TRIG_0, LOW);
     
-    long duration = pulseIn(ECHO_0, HIGH);
+    long duration = pulseIn(ECHO_0, HIGH, 10000);
     long distanceCM = duration * 0.034 / 2; // cm
     return distanceCM;
   }
   else if (module == 1) {
     digitalWrite(TRIG_1, LOW);
-    delayMicroseconds(2);
+    vTaskDelay(pdMS_TO_TICKS(2));
     digitalWrite(TRIG_1, HIGH);
-    delayMicroseconds(10);
+    vTaskDelay(pdMS_TO_TICKS(10));
     digitalWrite(TRIG_1, LOW);
     
-    long duration = pulseIn(ECHO_1, HIGH);
+    long duration = pulseIn(ECHO_1, HIGH, 10000);
     long distanceCM = duration * 0.034 / 2; // cm
     return distanceCM;
   }
@@ -337,6 +403,7 @@ long getDistanceCM(int module) {
 
 void loop() {
   // Rotate CW slowly at 5 RPM
+  /*
   if (debug) {
   digitalWrite(5,HIGH);
   //myStepper.setSpeed(3);
@@ -350,5 +417,7 @@ void loop() {
     digitalWrite(5,LOW);
   //myStepper.step(-stepsPerRevolution/16);
   // Rotate CCW quickly at 10 RPM  
+  
   }
+  */
 }
