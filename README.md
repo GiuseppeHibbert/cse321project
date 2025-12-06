@@ -1,5 +1,5 @@
 <h1>CSE 321: Tracking Turret Sentry Project</h1>
-<img src="/images/sentry.png"></img>
+<img src="/images/sentry.jpg"></img>
 
 <h2>Setup</h2>
 <li>1. Use the included USB Cable to plug the Sentry into a laptop or computer</li>
